@@ -21,8 +21,7 @@ rx_bw = int(3.84e6)
 capture_time = 0.050
 num_samps = int(sample_rate * capture_time)
 
-# OFDM local SRS settings
-# Try these first because they worked for your plot.
+# Local OFDM/SRS settings
 N_FFT = 512
 CP_LEN = 36
 
@@ -61,7 +60,6 @@ cfg_ded = SRSConfigDedicated(
     transmissionCombNum=2,
 )
 
-# Generate frequency-domain SRS sequence from your config file
 r, k0, sc_idx, T_per, T_off = generateSRSsequence(
     cfg_ded,
     cfg_com,
@@ -85,21 +83,6 @@ print("T_off [subframes/ms]:", T_off)
 def make_time_domain_srs(r, sc_idx, N_RB_UL, n_fft=512, cp_len=36):
     """
     Convert frequency-domain SRS sequence into a time-domain OFDM symbol.
-
-    r:
-        Frequency-domain SRS sequence from generateSRSsequence()
-
-    sc_idx:
-        SRS subcarrier indices from generateSRSsequence()
-
-    N_RB_UL:
-        Number of uplink RBs. Example: 25 means 300 active subcarriers.
-
-    n_fft:
-        Local FFT size.
-
-    cp_len:
-        Cyclic prefix length in samples.
     """
 
     freq_grid = np.zeros(n_fft, dtype=np.complex64)
@@ -112,16 +95,12 @@ def make_time_domain_srs(r, sc_idx, N_RB_UL, n_fft=512, cp_len=36):
     if np.any(fft_bins < 0) or np.any(fft_bins >= n_fft):
         raise ValueError("Some SRS subcarriers fall outside the FFT grid.")
 
-    # Place SRS onto allocated subcarriers
     freq_grid[fft_bins] = r
 
-    # Convert centered frequency grid to IFFT input order
     time_no_cp = np.fft.ifft(np.fft.ifftshift(freq_grid))
 
-    # Add cyclic prefix
     time_with_cp = np.r_[time_no_cp[-cp_len:], time_no_cp]
 
-    # Normalize average power
     time_with_cp = time_with_cp / (
         np.sqrt(np.mean(np.abs(time_with_cp) ** 2)) + 1e-12
     )
@@ -139,13 +118,17 @@ local_srs_td = make_time_domain_srs(
 
 L = len(local_srs_td)
 
+# Useful OFDM symbol only: remove CP
+local_useful = local_srs_td[CP_LEN : CP_LEN + N_FFT]
+
 print()
 print("============================================================")
 print("LOCAL TIME-DOMAIN SRS")
 print("============================================================")
 print("N_FFT:", N_FFT)
 print("CP_LEN:", CP_LEN)
-print("Local SRS time-domain length:", L)
+print("Full local SRS length CP + symbol:", L)
+print("Useful local SRS length:", len(local_useful))
 
 # ============================================================
 # PLUTO SETUP
@@ -188,7 +171,6 @@ samples = sdr.rx()
 rx0 = np.asarray(samples[0], dtype=np.complex64)
 rx1 = np.asarray(samples[1], dtype=np.complex64)
 
-# Remove DC offset
 rx0 = rx0 - np.mean(rx0)
 rx1 = rx1 - np.mean(rx1)
 
@@ -225,15 +207,12 @@ corr1_complex = np.correlate(rx1_norm, local_srs_td.conj(), mode="valid")
 corr0 = np.abs(corr0_complex)
 corr1 = np.abs(corr1_complex)
 
-# Normalize each channel correlation
 corr0_norm = corr0 / (np.max(corr0) + 1e-12)
 corr1_norm = corr1 / (np.max(corr1) + 1e-12)
 
-# Joint correlation for synchronous detection
 corr_joint = corr0_norm + corr1_norm
 corr_joint = corr_joint / (np.max(corr_joint) + 1e-12)
 
-# Single strongest peaks
 peak0 = int(np.argmax(corr0_norm))
 peak1 = int(np.argmax(corr1_norm))
 peak_joint = int(np.argmax(corr_joint))
@@ -273,42 +252,49 @@ for i, p in enumerate(peaks):
     )
 
 # ============================================================
-# EXTRACT SRS REGIONS AND COMPUTE PRELIMINARY PHASE DIFFERENCE
+# PHASE DIFFERENCE USING USEFUL OFDM SYMBOL ONLY
 # ============================================================
 
 phase_diffs = []
 valid_peaks = []
+h0_values = []
+h1_values = []
 
 print()
 print("============================================================")
 print("PHASE DIFFERENCE PER DETECTED SRS")
+print("USEFUL OFDM SYMBOL ONLY, CP REMOVED")
 print("============================================================")
 
 for i, p in enumerate(peaks):
     start = int(p)
-    end = start + L
 
-    if end > len(rx0):
+    useful_start = start + CP_LEN
+    useful_end = useful_start + N_FFT
+
+    if useful_end > len(rx0):
         print(f"SRS {i+1}: skipped because it is too close to buffer end.")
         continue
 
-    # Use the SAME start/end for RX0 and RX1
-    rx0_srs = rx0[start:end]
-    rx1_srs = rx1[start:end]
+    rx0_srs_useful = rx0[useful_start:useful_end]
+    rx1_srs_useful = rx1[useful_start:useful_end]
 
-    # Channel estimate using local SRS
-    h0 = np.vdot(local_srs_td, rx0_srs)
-    h1 = np.vdot(local_srs_td, rx1_srs)
+    # Estimate complex channel on each RX channel
+    h0 = np.vdot(local_useful, rx0_srs_useful)
+    h1 = np.vdot(local_useful, rx1_srs_useful)
 
-    # Phase difference RX1 relative to RX0
+    # Phase of RX1 relative to RX0
     phase = np.angle(h1 * np.conj(h0))
 
     phase_diffs.append(phase)
     valid_peaks.append(p)
+    h0_values.append(h0)
+    h1_values.append(h1)
 
     print(
         f"SRS {i+1}: "
         f"time={p / sample_rate * 1000:.3f} ms, "
+        f"useful_start={useful_start}, "
         f"phase={phase:.5f} rad, "
         f"phase={np.rad2deg(phase):.2f} deg, "
         f"|h0|={np.abs(h0):.3f}, "
@@ -317,10 +303,12 @@ for i, p in enumerate(peaks):
 
 phase_diffs = np.array(phase_diffs, dtype=float)
 valid_peaks = np.array(valid_peaks, dtype=int)
+h0_values = np.array(h0_values, dtype=np.complex64)
+h1_values = np.array(h1_values, dtype=np.complex64)
 
 if len(phase_diffs) > 0:
-    # Correct circular averaging of phase
     avg_phase = np.angle(np.mean(np.exp(1j * phase_diffs)))
+    phase_coherence = np.abs(np.mean(np.exp(1j * phase_diffs)))
 
     print()
     print("============================================================")
@@ -329,21 +317,23 @@ if len(phase_diffs) > 0:
     print("Valid SRS peaks used:", len(phase_diffs))
     print("Average phase [rad]:", avg_phase)
     print("Average phase [deg]:", np.rad2deg(avg_phase))
+    print("Phase coherence R:", phase_coherence)
+
+    if phase_coherence > 0.9:
+        print("Phase looks stable.")
+    elif phase_coherence > 0.6:
+        print("Phase is somewhat stable, but noisy.")
+    else:
+        print("Phase is unstable. AoA will not be reliable yet.")
+
 else:
     avg_phase = np.nan
+    phase_coherence = np.nan
     print("No valid SRS regions found for phase calculation.")
 
 # ============================================================
-# OPTIONAL AOA PLACEHOLDER
+# AOA INFO FOR LATER
 # ============================================================
-# For AoA later:
-#
-# phase_diff = 2*pi*d*sin(theta)/lambda
-#
-# theta = arcsin(phase_diff * lambda / (2*pi*d))
-#
-# You need antenna spacing d.
-# Usually d should be <= lambda/2 to avoid ambiguity.
 
 c = 299_792_458.0
 wavelength = c / center_freq
@@ -355,9 +345,12 @@ print("============================================================")
 print("Wavelength [m]:", wavelength)
 print("Half wavelength [m]:", wavelength / 2)
 
-# Example only:
+# Uncomment later when you know antenna spacing:
+#
 # antenna_spacing = wavelength / 2
-# theta_rad = np.arcsin(avg_phase * wavelength / (2 * np.pi * antenna_spacing))
+# arg = avg_phase * wavelength / (2 * np.pi * antenna_spacing)
+# arg = np.clip(arg, -1.0, 1.0)
+# theta_rad = np.arcsin(arg)
 # theta_deg = np.rad2deg(theta_rad)
 # print("Estimated AoA [deg]:", theta_deg)
 
@@ -430,10 +423,11 @@ if len(phase_diffs) > 0:
 # ============================================================
 
 np.savez(
-    "pluto_srs_correlation_and_phase_result.npz",
+    "pluto_srs_correlation_and_phase_result_updated.npz",
     rx0=rx0,
     rx1=rx1,
     local_srs_td=local_srs_td,
+    local_useful=local_useful,
     r_freq=r,
     sc_idx=sc_idx,
     corr0_norm=corr0_norm,
@@ -443,6 +437,9 @@ np.savez(
     valid_peaks=valid_peaks,
     phase_diffs=phase_diffs,
     avg_phase=avg_phase,
+    phase_coherence=phase_coherence,
+    h0_values=h0_values,
+    h1_values=h1_values,
     sample_rate=sample_rate,
     center_freq=center_freq,
     N_FFT=N_FFT,
@@ -453,4 +450,4 @@ np.savez(
 )
 
 print()
-print("Saved result to: pluto_srs_correlation_and_phase_result.npz")
+print("Saved result to: pluto_srs_correlation_and_phase_result_updated.npz")
