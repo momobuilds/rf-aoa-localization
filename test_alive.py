@@ -122,7 +122,7 @@ print("Number of packet candidates:", len(packets))
 
 plt.figure()
 plt.plot(t_ms, p0_rel_db, label="RX0 relative power")
-plt.plot(t_ms, p1_rel_db, label="RX1 relative power")
+#plt.plot(t_ms, p1_rel_db, label="RX1 relative power")
 plt.axhline(threshold_db, linestyle="--", label="threshold")
 
 for center_ms, width_ms in packets:
