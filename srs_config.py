@@ -368,3 +368,66 @@ def extractPhiRow_T55121(u):
     row = phi_table[u]
     return row
 
+if __name__ == "__main__":
+
+    # --------------------Example inputs----------------
+    sys_params = SystemParams(
+        C_RNTI=0,
+        N_RB_UL=15,
+        PCID=0,
+        sequence_hopping_enabled=0,
+        FDD=1,
+        group_hopping_enabled=0
+    )
+
+    cfg_com = SRSConfigCommon(
+        srs_bandwidthConfig=5,
+        srs_subframeConfig=0
+    )
+
+    cfg_ded = SRSConfigDedicated(
+        srs_bandwidth=0,
+        srs_hoppingBandwidth=3,
+        freqDomainPosition=0,
+        duration=1,
+        config_Index=7,          # periodicity 10 ms, offset 0
+        transmissionComb=0,
+        cyclicShift=0,
+        srs_AntennaPort=10,
+        transmissionCombNum=2
+    )
+#-------------------------------------------------------------------------
+    r, k0, sc_idx, T_per, T_off = generateSRSsequence(
+        cfg_ded,
+        cfg_com,
+        sys_params
+    )
+
+    m_srs = get_m_srs(
+        cfg_com.srs_bandwidthConfig,
+        cfg_ded.srs_bandwidth,
+        sys_params.N_RB_UL
+    )
+
+    M_SRS = int(m_srs * 12 / cfg_ded.transmissionCombNum)
+
+    print("Generated SRS sequence r:")
+    print(r)
+
+    print("\nStarting subcarrier k0:")
+    print(k0)
+
+    print("\nSubcarrier indices sc_idx:")
+    print(sc_idx)
+
+    print("\nSRS bandwidth:")
+    print(f"m_srs = {m_srs} RB")
+    print(f"M_SRS = {M_SRS} tones")
+
+    print("\nTotal LTE uplink bandwidth:")
+    print(f"N_RB_UL = {sys_params.N_RB_UL} RB")
+    print(f"Total subcarriers = {sys_params.N_RB_UL * 12}")
+
+    print("\nSRS periodicity and offset:")
+    print(f"T_SRS = {T_per} ms")
+    print(f"T_offset = {T_off}")

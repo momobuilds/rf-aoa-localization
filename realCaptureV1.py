@@ -18,12 +18,12 @@ sample_rate = int(5e6)
 center_freq = int(886.6e6)
 rx_bw = int(3.84e6)
 
-capture_time = 0.050
+capture_time = 1
 num_samps = int(sample_rate * capture_time)
 
 # Local OFDM/SRS settings
 N_FFT = 512
-CP_LEN = 36
+CP_LEN = 18
 
 # Peak detection settings
 MIN_PEAK_DISTANCE_MS = 8.0
@@ -34,26 +34,29 @@ RX_GAIN_CH0 = 30.0
 RX_GAIN_CH1 = 30.0
 
 # ============================================================
-# SRS CONFIGURATION
+# SRS CONFIGURATION FROM SUPERVISOR
 # ============================================================
 
 sys_params = SystemParams(
-    C_RNTI=1,
-    N_RB_UL=25,
-    PCID=0,
+    C_RNTI=0x1234,
+    N_RB_UL=15,        # uplink RBs from supervisor config
+    PCID=1,            # Physical Cell ID from supervisor config
+    sequence_hopping_enabled=0,
+    FDD=1,
+    group_hopping_enabled=0,
 )
 
 cfg_com = SRSConfigCommon(
-    srs_bandwidthConfig=5,
+    srs_bandwidthConfig=5,    # C_SRS
     srs_subframeConfig=0,
 )
 
 cfg_ded = SRSConfigDedicated(
-    srs_bandwidth=0,
-    srs_hoppingBandwidth=3,
+    srs_bandwidth=0,          # B_SRS
+    srs_hoppingBandwidth=3,   # hopping disabled if B_SRS <= this
     freqDomainPosition=0,
     duration=1,
-    config_Index=77,
+    config_Index=7,           # this gives T_per = 10 ms in the provided function
     transmissionComb=0,
     cyclicShift=0,
     srs_AntennaPort=10,
@@ -75,6 +78,14 @@ print("First SRS subcarrier index:", sc_idx[0])
 print("Last SRS subcarrier index:", sc_idx[-1])
 print("T_per [ms]:", T_per)
 print("T_off [subframes/ms]:", T_off)
+
+total_subcarriers = sys_params.N_RB_UL * 12
+srs_bandwidth_hz = len(sc_idx) * 15e3 * cfg_ded.transmissionCombNum
+lte_bandwidth_hz = total_subcarriers * 15e3
+
+print("Total active subcarriers:", total_subcarriers)
+print("SRS bandwidth [MHz]:", srs_bandwidth_hz / 1e6)
+print("LTE-like active bandwidth [MHz]:", lte_bandwidth_hz / 1e6)
 
 # ============================================================
 # CREATE LOCAL TIME-DOMAIN SRS
@@ -171,6 +182,7 @@ samples = sdr.rx()
 rx0 = np.asarray(samples[0], dtype=np.complex64)
 rx1 = np.asarray(samples[1], dtype=np.complex64)
 
+# Remove DC offset
 rx0 = rx0 - np.mean(rx0)
 rx1 = rx1 - np.mean(rx1)
 
@@ -224,6 +236,35 @@ print("Strongest RX0 peak time [ms]:", peak0 / sample_rate * 1000)
 print("Strongest RX1 peak time [ms]:", peak1 / sample_rate * 1000)
 print("Strongest joint peak time [ms]:", peak_joint / sample_rate * 1000)
 print("RX1 - RX0 strongest peak difference [samples]:", peak1 - peak0)
+
+# ============================================================
+# RAW CORRELATION QUALITY CHECK
+# ============================================================
+
+def peak_to_floor_db(corr, peak_index, guard=1000):
+    mask = np.ones(len(corr), dtype=bool)
+
+    lo = max(0, peak_index - guard)
+    hi = min(len(corr), peak_index + guard)
+    mask[lo:hi] = False
+
+    floor = np.median(corr[mask]) + 1e-12
+    peak = corr[peak_index] + 1e-12
+
+    return 20 * np.log10(peak / floor)
+
+
+raw_joint = corr0 + corr1
+raw_peak = int(np.argmax(raw_joint))
+raw_quality_db = peak_to_floor_db(raw_joint, raw_peak)
+
+print()
+print("============================================================")
+print("RAW CORRELATION QUALITY")
+print("============================================================")
+print("Raw joint peak index:", raw_peak)
+print("Raw joint peak time [ms]:", raw_peak / sample_rate * 1000)
+print("Raw joint peak-to-floor [dB]:", raw_quality_db)
 
 # ============================================================
 # DETECT ALL SRS PEAKS
@@ -320,9 +361,9 @@ if len(phase_diffs) > 0:
     print("Phase coherence R:", phase_coherence)
 
     if phase_coherence > 0.9:
-        print("Phase looks stable.")
+        print("Phase mostly coherent, but calibration is still needed.")
     elif phase_coherence > 0.6:
-        print("Phase is somewhat stable, but noisy.")
+        print("Phase is somewhat coherent, but noisy.")
     else:
         print("Phase is unstable. AoA will not be reliable yet.")
 
@@ -423,7 +464,7 @@ if len(phase_diffs) > 0:
 # ============================================================
 
 np.savez(
-    "pluto_srs_correlation_and_phase_result_updated.npz",
+    "pluto_srs_correlation_and_phase_supervisor_config.npz",
     rx0=rx0,
     rx1=rx1,
     local_srs_td=local_srs_td,
@@ -433,6 +474,7 @@ np.savez(
     corr0_norm=corr0_norm,
     corr1_norm=corr1_norm,
     corr_joint=corr_joint,
+    raw_joint=raw_joint,
     peaks=peaks,
     valid_peaks=valid_peaks,
     phase_diffs=phase_diffs,
@@ -447,7 +489,11 @@ np.savez(
     k0=k0,
     T_per=T_per,
     T_off=T_off,
+    N_RB_UL=sys_params.N_RB_UL,
+    PCID=sys_params.PCID,
+    C_RNTI=sys_params.C_RNTI,
+    config_Index=cfg_ded.config_Index,
 )
 
 print()
-print("Saved result to: pluto_srs_correlation_and_phase_result_updated.npz")
+print("Saved result to: pluto_srs_correlation_and_phase_supervisor_config.npz")
