@@ -1,10 +1,76 @@
 # PlutoSDR SRS Angle of Arrival
 
+![Python](https://img.shields.io/badge/Python-3.x-blue)
+![SDR](https://img.shields.io/badge/SDR-PlutoSDR%20%2F%20AD9361-green)
+![Signal](https://img.shields.io/badge/Signal-LTE%20SRS-purple)
+![Status](https://img.shields.io/badge/status-research%20prototype-orange)
+
 Real-time Angle of Arrival (AoA) estimation using LTE Sounding Reference Signal
 (SRS) correlation on two coherent receive channels from a PlutoSDR /
-AD9361-compatible SDR. The workflow moves from SRS generation and simulation, to
-real capture, splitter-based phase calibration, and finally the real-time GUI in
-`RT_UI.py`.
+AD9361-compatible SDR.
+
+The project starts with LTE SRS sequence generation and simulation, then moves
+to real PlutoSDR capture, splitter-based phase calibration, and a final real-time
+GUI in `RT_UI.py`.
+
+## Final Result
+
+`RT_UI.py` estimates the incoming signal direction in real time by:
+
+1. Detecting SRS peaks through correlation.
+2. Estimating RX0/RX1 phase difference.
+3. Subtracting splitter-based hardware calibration phase.
+4. Converting corrected phase difference into an AoA estimate.
+
+## Project at a Glance
+
+| Item | Value |
+|---|---|
+| SDR target | PlutoSDR / AD9361-compatible SDR |
+| Receive setup | 2 coherent RX channels |
+| Reference signal | LTE Sounding Reference Signal |
+| Calibration | Splitter-based RX0/RX1 phase calibration |
+| Final script | `RT_UI.py` |
+| Output | Real-time AoA estimate with GUI |
+| Default SDR URI | `ip:192.168.2.1` |
+
+## Workflow
+
+```mermaid
+flowchart LR
+    A[SRS Configuration] --> B[Simulation Test]
+    B --> C[PlutoSDR Capture]
+    C --> D[Correlation and Phase Analysis]
+    D --> E[Splitter Calibration]
+    E --> F[Real-Time AoA GUI]
+```
+
+## Hardware Setup
+
+```mermaid
+flowchart LR
+    TX[SRS Transmitter] --> AIR[Propagation Channel]
+    AIR --> ANT0[RX0 Antenna]
+    AIR --> ANT1[RX1 Antenna]
+    ANT0 --> SDR[PlutoSDR / AD9361]
+    ANT1 --> SDR
+    SDR --> HOST[Raspberry Pi / Linux Machine]
+    HOST --> UI[RT_UI.py]
+```
+
+For calibration, replace the two antennas with a splitter so RX0 and RX1 receive
+the same signal:
+
+```mermaid
+flowchart LR
+    TX[SRS Source] --> SPLIT[RF Splitter]
+    SPLIT --> RX0[RX0]
+    SPLIT --> RX1[RX1]
+    RX0 --> SDR[PlutoSDR / AD9361]
+    RX1 --> SDR
+    SDR --> CAL[calibration.py]
+    CAL --> JSON[srs_splitter_calibration.json]
+```
 
 ## Hardware Requirements
 
@@ -65,6 +131,23 @@ sdr = adi.Pluto("ip:192.168.2.1")
 
 The current hard-coded IP appears in `pluto_srs_receive_corr.py`,
 `realCaptureV1.py`, `capturteV2.py`, `calibration.py`, and `RT_UI.py`.
+
+## Repository Structure
+
+```text
+.
+├── README.md
+├── requirements.txt
+├── .gitignore
+├── srs_config.py
+├── test_srs_sim.py
+├── pluto_srs_receive_corr.py
+├── realCaptureV1.py
+├── capturteV2.py
+├── calibration.py
+├── srs_splitter_calibration.json
+└── RT_UI.py
+```
 
 ## Project Files
 
@@ -214,3 +297,13 @@ The SDR/SRS parameters in these scripts must match the transmitter waveform.
 - SDR and SRS parameters are hard-coded and must match the transmitter.
 - The calibration JSON is hardware/setup-specific; rerun calibration after
   changing cables, splitter, SDR, frequency, or antennas.
+
+## Suggested Visuals
+
+For a stronger presentation, add these images under an `assets/` folder and link
+them near the top of this README:
+
+- `assets/rt_ui.png`: screenshot of the real-time AoA GUI.
+- `assets/correlation_peaks.png`: plot showing detected SRS correlation peaks.
+- `assets/calibration_result.png`: plot or terminal screenshot showing the final
+  splitter calibration phase and coherence.
